@@ -10,36 +10,45 @@ st.title("🏌️ PGA Championship + Bachelor Party Leaderboard")
 
 tab1, tab2 = st.tabs(["📊 PGA Leaderboard", "💸 Bachelor Party Standings"])
 
-# ---------------- TAB 1: PGA LEADERBOARD ---------------- #
-with tab1:
-    st.subheader("Live PGA Top 10")
+# ---------------- FUNCTION TO GET LEADERBOARD ---------------- #
+@st.cache_data(ttl=60)
+def get_leaderboard():
     try:
         url = "https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard"
         r = requests.get(url)
         data = r.json()
 
-        players = data["events"][0]["competitions"][0]["athletes"]
+        competitors = data["events"][0]["competitions"][0]["competitors"]
         leaderboard = []
+        player_pos_map = {}
 
-        for player in players:
-            name = player["athlete"]["displayName"]
-            score = player["score"]
-            position = player["status"]["position"]["displayName"]
-            thru = player["status"].get("thru", "-")
-            leaderboard.append((position, name, score, thru))
+        for p in competitors:
+            name = p["athlete"]["displayName"]
+            score = p.get("score", "--")
+            pos = p["status"]["position"]["displayName"]
+            thru = p["status"].get("thru", "-")
+            leaderboard.append((pos, name, score, thru))
+            player_pos_map[name] = pos
 
         df = pd.DataFrame(leaderboard, columns=["Position", "Player", "Score", "Thru"])
-        df["Score"] = df["Score"].astype(int)
+        df["Score"] = pd.to_numeric(df["Score"], errors="coerce")
         df = df.sort_values(by="Score")
-        st.dataframe(df.head(10), use_container_width=True)
-
+        return df, player_pos_map
     except Exception as e:
-        st.error("Error loading PGA data. Try refreshing.")
+        st.error("Failed to load PGA leaderboard.")
         st.exception(e)
+        return pd.DataFrame(), {}
+
+# ---------------- TAB 1: PGA LEADERBOARD ---------------- #
+with tab1:
+    st.subheader("Live PGA Top 10")
+    df_leaderboard, _ = get_leaderboard()
+    if not df_leaderboard.empty:
+        st.dataframe(df_leaderboard.head(10), use_container_width=True)
 
 # ---------------- TAB 2: BACHELOR PARTY STANDINGS ---------------- #
 with tab2:
-    st.subheader("Bachelor Party Winnings 💸 (Top 10 Payouts Only)")
+    st.subheader("Bachelor Party Winnings 💸")
 
     payouts = {
         "1": 198,
@@ -65,50 +74,34 @@ with tab2:
         "Matthew Bauer": ["Ludvig Åberg", "Joaquin Niemann", "Patrick Reed", "Min Woo Lee", "Dean Burmester", "Byeong Hun An", "Ryan Fox", "Rickie Fowler"],
     }
 
-    # Get all players from leaderboard
-    url = "https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard"
-    try:
-        r = requests.get(url)
-        data = r.json()
-        players = data["events"][0]["competitions"][0]["athletes"]
+    _, player_pos = get_leaderboard()
 
-        player_results = {}
-        for player in players:
-            name = player["athlete"]["displayName"]
-            pos = player["status"]["position"]["displayName"]
-            player_results[name] = pos
-
-        summary = []
-
-        for friend, golfers in teams.items():
-            total = 0
-            for golfer in golfers:
-                pos = player_results.get(golfer, "—")
-                winnings = payouts.get(pos, 0)
-                summary.append({
-                    "Friend": friend,
-                    "Golfer": golfer,
-                    "Position": pos,
-                    "Winnings": f"${winnings}"
-                })
-                total += winnings
+    summary = []
+    for friend, golfers in teams.items():
+        total = 0
+        for golfer in golfers:
+            pos = player_pos.get(golfer, "—")
+            winnings = payouts.get(pos, 0)
             summary.append({
                 "Friend": friend,
-                "Golfer": "Total",
-                "Position": "",
-                "Winnings": f"${total}"
+                "Golfer": golfer,
+                "Position": pos,
+                "Winnings": f"${winnings}"
             })
+            total += winnings
+        summary.append({
+            "Friend": friend,
+            "Golfer": "Total",
+            "Position": "",
+            "Winnings": f"${total}"
+        })
 
-        df_summary = pd.DataFrame(summary)
-        df_summary["Winnings ($)"] = df_summary["Winnings"].apply(lambda x: int(x.replace("$", "")) if "$" in x else 0)
+    df_summary = pd.DataFrame(summary)
+    df_summary["Winnings ($)"] = df_summary["Winnings"].apply(lambda x: int(x.replace("$", "")) if "$" in x else 0)
 
-        leaderboard = df_summary[df_summary["Golfer"] == "Total"].sort_values(by="Winnings ($)", ascending=False)
-        st.markdown("### 💰 Leaderboard")
-        st.dataframe(leaderboard[["Friend", "Winnings"]], use_container_width=True)
+    leaderboard = df_summary[df_summary["Golfer"] == "Total"].sort_values(by="Winnings ($)", ascending=False)
+    st.markdown("### 💰 Leaderboard")
+    st.dataframe(leaderboard[["Friend", "Winnings"]], use_container_width=True)
 
-        st.markdown("### 🏌️ Player Breakdown")
-        st.dataframe(df_summary[df_summary["Golfer"] != "Total"][["Friend", "Golfer", "Position", "Winnings"]], use_container_width=True)
-
-    except Exception as e:
-        st.error("Error loading Bachelor Party leaderboard.")
-        st.exception(e)
+    st.markdown("### 🏌️ Player Breakdown")
+    st.dataframe(df_summary[df_summary["Golfer"] != "Total"][["Friend", "Golfer", "Position", "Winnings"]], use_container_width=True)
